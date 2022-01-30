@@ -11,44 +11,41 @@ from dateutil import parser
 import argparse
 import itertools
 import orgparse
-from orgparse import load, loads
-from datetime import datetime, timezone
-import django
+from datetime import datetime
 from django.template.defaultfilters import slugify
 import time
 import shortuuid
-from shortuuid.django_fields import ShortUUIDField
 
 logging.basicConfig(filename='diigorg.log', encoding='utf-8', level=logging.INFO, filemode='w')
 
-spinner = itertools.cycle(['-', '\\', '|', '/'])
+def dir_path(path):
+    if os.path.isdir(path):
+        return path
+    else:
+        raise argparse.ArgumentTypeError(f"{path} is not a valid path")
 
 argParser = argparse.ArgumentParser(description = 'Sync Diigo bookmarks to Org files')
 argParser.add_argument('key', type=str, help='Your Diigo application key')
 argParser.add_argument('username', type=str, help='Your Diigo username')
 argParser.add_argument('pw', type=str, help='Your Diigo password')
-argParser.add_argument('-fd','--force-download', nargs='?', const=True, help='Force downloading of bookmarks. This will overwrite anything local.')
-argParser.add_argument('--test',nargs='?', const=True )
+argParser.add_argument('-a', '--all', nargs='?', const=True,  help='Sync all bookmarks. Otherwise only bookmarks changed since last sync will be sunc')
+argParser.add_argument('-d', '--dir', type=dir_path, default=os.getcwd(), help='Directory to sync')
+argParser.add_argument('--force-download', nargs='?', const=True, help='for debugging only. do not use')
+argParser.add_argument('--test', nargs='?', const=True, help='for debugging only. do not use.')
+argParser.add_argument('--dry-run', nargs='?', const=True,  help='for debugging only. do not use.')
 
 args = argParser.parse_args()
 
-fetch_start = 0
-fetch_stop_at = -1
-fetch_count_per_tranche = -1
+ORG_TIMESTAMP_FORMAT = '[%Y-%m-%d %a %H:%M:%S]'
+FILENAME_DELIMITER = ' - '
 
-if args.test:
-    fetch_start = 3999
-    fetch_stop_at = -1
-    fetch_count_per_tranche = 10
-    sort = 0
-    print( "TESTING..." )
+todo_readlater = ['NEXT']
 
-bookmarks_file = "diigo-bookmarks.org"
-id_format = '%y%m%d%H%M%S'
-org_timestamp_format = '[%Y-%m-%d %a %H:%M:%S]'
-filename_delimiter = ' - '
-work_dir = "."
+num_dl = 0
+num_ul = 0
+num_del = 0
 
+spinner = itertools.cycle(['-', '\\', '|', '/'])
   # {
   #*   "title":"Diigo API Help",
   #*   "url":"http://www.diigo.com/help/api.html",
@@ -66,19 +63,17 @@ class DiigoBookmark:
     def __init__(self, downloaded_bookmark):
         self.bookmark = downloaded_bookmark
         self.modified_timestamp = self._get_modified_timestamp()
-        self.created_timestamp = self._get_created_timestamp()
-        self.id = self._get_id()
-
-        # TODO find existing filename like we find matches. First by id, then URL
-        self.file = self._create_filename()
-
-        self._convert_tag_string_to_tag_set()
         self.has_changed = self.modified_timestamp > last_sync_time
-        # print( self.get_field('title'),self._get_org_modified_timestamp(), time.strftime(org_timestamp_format, time.localtime(last_sync_time)))
-        print(self.get_field('title'),self.has_changed, self.modified_timestamp, last_sync_time)
-        self.logging_title = self.bookmark["url"][:50].ljust(50)
+        self.created_timestamp = self._get_created_timestamp()
+        self.is_new = self.created_timestamp > last_sync_time
+        self.id = self._get_id()
+        self.file = self._find_or_create_filename()
+        self._convert_tag_string_to_tag_set()
+        # print( self.get_field('title'),org_timestamp(self.modified_timestamp), time.strftime(ORG_TIMESTAMP_FORMAT, time.localtime(last_sync_time)))
+        # print(self.get_field('title'),self.has_changed, self.modified_timestamp, last_sync_time)
+        self.logging_title = self.id + ' ' + self.bookmark["url"][6:56]
         self.incomplete = False
-        logging.info('Receiving'.ljust(15) + f'{self.logging_title} updated:{self._get_org_modified_timestamp().ljust(20) }')
+        logline('Receiving', self.logging_title, org_timestamp(self.modified_timestamp), 'NEW' if self.is_new else '')
         logging.debug(self.bookmark)
 
     def get_field(self, field):
@@ -94,49 +89,73 @@ class DiigoBookmark:
         return int(parser.parse(self.bookmark['updated_at']).timestamp())
 
     def _get_id(self):
-        return datetime.fromtimestamp(self.created_timestamp).strftime(id_format)
+        # return datetime.fromtimestamp(self.created_timestamp).strftime(ID_FORMAT)
+        return shortuuid.uuid(name=str(self.created_timestamp) + self.bookmark['url'])[:6]
 
     def _create_slug(self):
         return slugify(self.bookmark['title']).replace("-", " ")[:80]
 
-    def _create_filename(self):
-        return self.id + filename_delimiter + self._create_slug() + ".org"
-
-    def _get_org_created_timestamp(self):
-        return datetime.fromtimestamp(self.created_timestamp).strftime(org_timestamp_format)
-
-    def _get_org_modified_timestamp(self):
-        return datetime.fromtimestamp(self.modified_timestamp).strftime(org_timestamp_format)
+    def _find_or_create_filename(self):
+        # first see if file we expect exists
+        # if not, search for it by suuid, and if found, rename it
+        # if not found, return ideal name
+        correct_filename = os.path.join(args.dir, self.id + FILENAME_DELIMITER + self._create_slug() + ".org")
+        if os.path.exists(correct_filename):
+            return correct_filename
+        else:
+            for file in os.listdir(args.dir):
+                if os.path.basename(file).startswith(self.id):
+                    os.rename(file, correct_filename)
+                    return correct_filename
+            return correct_filename
 
     def _get_org_readlater(self):
-        return 'TODO ' if self.bookmark['readlater'] == 'yes' else ''
+        return f'{todo_readlater[0]} ' if self.bookmark['readlater'] == 'yes' else ''
 
     def _tags_as_string(self):
         return ':'.join(self.bookmark['tags'])
 
     def _tags_as_org_string(self):
-        if not self._has_tags():
-            return ''
-        else:
+        if self.bookmark['tags']:
             return '\t:' + self._tags_as_string() + ':'
+        else:
+            return ''
 
     def write_bookmark_file(self):
-        ""
-        with open(os.path.join(work_dir, self.file), "w") as f:
-            f.write(f'* {self._get_org_readlater()}[[{self.bookmark["url"]}][{self.bookmark["title"]}]]{self._tags_as_org_string()}')
+        global num_dl
+        bm = self.bookmark
+        with open(self.file, "w") as f:
+            f.write(f'\n* {self._get_org_readlater()}[[{bm["url"]}][{bm["title"]}]]{self._tags_as_org_string()}')
 
             # PROPERTY DRAWER
             f.write('\n')
             f.write(':PROPERTIES:\n')
-            f.write(f':CREATED: {self._get_org_created_timestamp()}\n')
-            f.write(f':UPDATED: {self._get_org_modified_timestamp()}\n')
-            f.write(f':SHARED: {self.bookmark["shared"]}\n')
+            f.write(f':CREATED: {org_timestamp(self.created_timestamp)}\n')
+            f.write(f':UPDATED: {org_timestamp(self.modified_timestamp)}\n')
+            f.write(f':SHARED: {bm["shared"]}\n')
             f.write(":END:\n")
 
-            f.write(f'{self.bookmark["desc"]}\n')
+            f.write(f'{bm["desc"]}\n')
 
-    def _has_tags(self):
-        return self.bookmark['tags'] != 'no_tags'
+            if bm['annotations']:
+                f.write('\n')
+                for annot in bm['annotations']:
+                    f.write('** Annotation\n')
+                    # f.write('#+BEGIN_QUOTE\n')
+                    f.write(f'{annot["content"]}\n')
+                    # f.write('#+END_QUOTE\n')
+
+                    if annot['comments']:
+                        f.write('*** Comments\n')
+                        for comment in annot['comments']:
+                            f.write('#+BEGIN_QUOTE\n')
+                            f.write(f'{comment["content"]}\n')
+                            f.write(f'-- {comment["user"]}, ')
+                            f.write(f'{comment["created_at"]}\n')
+                            f.write('#+END_QUOTE\n')
+            num_dl += 1
+
+            return f'Saved {self.file}'
 
     def update_bookmark_file(self):
         ""
@@ -150,11 +169,11 @@ class DiigoBookmark:
             if lineno == start_lineno:
                 new_file_buffer += f'* {self._get_org_readlater()}[[{self.bookmark["url"]}][{self.bookmark["title"]}]]{self._tags_as_org_string()}\n'
                 new_file_buffer += f':PROPERTIES:\n'
-                new_file_buffer += f':CREATED: {self._get_org_created_timestamp()}\n'
-                new_file_buffer += f':UPDATED: {self._get_org_modified_timestamp()}\n'
+                new_file_buffer += f':CREATED: {org_timestamp(self.created_timestamp)}\n'
+                new_file_buffer += f':UPDATED: {org_timestamp(self.modified_timestamp)}\n'
                 new_file_buffer += f':SHARED: {self.bookmark["shared"]}\n'
                 new_file_buffer += f':END:\n'
-                new_file_buffer += f'{self.bookmark["desc"]}\n'
+                new_file_buffer += f'{self.bookmark["desc"]}'
             elif lineno >= end_lineno:
                 new_file_buffer += line
             lineno += 1
@@ -165,8 +184,19 @@ class DiigoBookmark:
         file_object.write(new_file_buffer)
         file_object.close()
 
-    def delete(self):
-        print('delete remote bookmark ', self.bookmark['title'])
+    def fix_tags_for_delete(self):
+        self.bookmark['tags'] = (',').join(self.bookmark['tags'])
+
+    def delete(self, reason='local bookmark was deleted.'):
+        global num_del
+        self.fix_tags_for_delete()
+        if not args.dry_run:
+            print( 'deleting ', self.bookmark['title'], reason )
+            url = f'https://secure.diigo.com/api/v2/bookmarks?key={args.key}&user={args.username}'
+            response = requests.delete(url, auth=HTTPBasicAuth(args.username, args.pw), json=self.bookmark)
+            response.close()
+            num_del += 1
+            return response.json()
 
 class OrgBookmark:
     def __init__(self, file):
@@ -175,9 +205,9 @@ class OrgBookmark:
         self.id = self._get_id_from_filename()
         self.bookmark = {}
         self.has_changed = self.modified_timestamp > last_sync_time
-        self.logging_title = f'{self.file[:50]}'.ljust(50)
+        self.logging_title = f'{self.file[:50]}'
         self.incomplete = True
-        logging.info('Parsing'.ljust(15) + f'{self.logging_title}  {"HAS CHANGED" if self.has_changed else ""}')
+        logline('Reading', self.logging_title, org_timestamp(self.modified_timestamp), "CHANGED" if self.has_changed else "")
 
     def get_field(self, field):
         if self.incomplete:
@@ -187,7 +217,7 @@ class OrgBookmark:
 
     def _get_id_from_filename(self):
         basename = os.path.basename(self.file)
-        return basename[0:basename.find(filename_delimiter)]
+        return basename[0:basename.find(FILENAME_DELIMITER)]
 
     def _get_file_modtime(self):
         return os.path.getmtime(self.file)
@@ -208,9 +238,6 @@ class OrgBookmark:
     def get_node_desc(self,node):
         return node.body
 
-    def get_node_id(self,node):
-        return node.get_property('ID')
-
     def get_node_shared(self,node):
         return node.get_property('SHARED')
 
@@ -221,51 +248,55 @@ class OrgBookmark:
         return are_bookmarks_identical(self, self.match)
 
     def parse_and_fill_out(self):
-        root = orgparse.load(self.file)
-        for node in root.children:
-            self.bookmark['title'] = self.get_node_title(node)
-            self.bookmark['url'] = self.get_node_url(node)
-            self.bookmark['tags'] = (self.get_node_tags(node))
-            self.bookmark['desc'] = self.get_node_desc(node)
-            self.bookmark['node_id'] = self.get_node_id(node)
-            self.bookmark['shared'] = self.get_node_shared(node)
-            self.bookmark['readlater'] = self.get_node_readlater(node)
-            self.incomplete = False
+        env = orgparse.OrgEnv(todos=todo_readlater, filename=self.file)
+        root = orgparse.load(self.file, env=env)
+        node = root.children[0]
+        self.bookmark['title'] = self.get_node_title(node)
+        self.bookmark['url'] = self.get_node_url(node)
+        self.bookmark['tags'] = (self.get_node_tags(node))
+        self.bookmark['desc'] = self.get_node_desc(node)
+        self.bookmark['shared'] = self.get_node_shared(node)
+        self.bookmark['readlater'] = self.get_node_readlater(node)
+        self.incomplete = False
 
     def fix_tags_for_upload(self):
         self.bookmark['tags'] = (',').join(self.bookmark['tags'])
 
+    def fix_readlater_for_upload(self):
+        self.bookmark['readLater'] = self.bookmark['readlater']
+
     def send(self, reason=''):
+        global num_ul
         self.parse_and_fill_out()
         self.fix_tags_for_upload()
-        print( 'sending ', self.bookmark['title'], reason )
+        self.fix_readlater_for_upload()
         url = f'https://secure.diigo.com/api/v2/bookmarks?key={args.key}&user={args.username}&merge=no'
-        response = requests.post(url, auth=HTTPBasicAuth(args.username, args.pw), json=self.bookmark)
-        response.close()
-        return response.json()
+        if not args.dry_run:
+            print( 'sending ', self.bookmark['title'], reason )
+            response = requests.post(url, auth=HTTPBasicAuth(args.username, args.pw), json=self.bookmark)
+            response.close()
+            num_ul += 1
+            return response.json()
+        else:
+            print( 'Dry-run: ', self.bookmark['title'], reason, '\n', url )
 
     def delete(self):
-        print( 'deleting ', self.bookmark['title'] )
+        global num_del
+        os.remove(self.file)
+        num_del += 1
 
-def find_matching_bookmark(bm_list, bm, method='id'):
-    "search by date-derived id first. If there are multiple matches, resort to URL. If there are multiple matches and the urls have been edited, then we no longer consider them a match"
-    next_method = ''
-    results = []
+    def get_id_desc_tail(self):
+        return f'//diigorg id:{self.id}'
 
-    match method:
-        case 'id':
-            results = [item for item in bm_list if item.id == bm.id]
-            next_method = 'url'
-        case 'url':
-            results = [item for item in bm_list if item.get_field('url') == bm.get_field('url')]
-            next_method = ''
+def org_timestamp(timestamp):
+    return datetime.fromtimestamp(timestamp).strftime(ORG_TIMESTAMP_FORMAT)
 
-    if len(results) == 1:
-        return results[0]
-    elif len(results) == 0:
-        return None
-    else:
-        return find_matching_bookmark(bm_list, bm, method=next_method) if next_method else None
+def find_matching_bookmark(bm_list, bm):
+    results = [item for item in bm_list if item.id == bm.id]
+    return results[0] if len(results) == 1 else None
+
+def logline( action='', title='', timestamp='', status='' ):
+    logging.info( f'{action.ljust(10)} {title.ljust(50)} {timestamp.ljust(10)} {status.ljust(10)}')
 
 def are_bookmarks_identical(bm1, bm2):
     if type(bm1) == OrgBookmark:
@@ -276,39 +307,55 @@ def are_bookmarks_identical(bm1, bm2):
 
     same = True
 
+    # these are the fields we can upload
     for item in ['title', 'url', 'tags', 'desc', 'shared', 'readlater']:
         if bm1.bookmark[item] != bm2.bookmark[item]:
             same = False
-            print(bm1.id, item, type(bm1), bm1.bookmark[item])
-            print(bm2.id, item, type(bm2), bm2.bookmark[item])
-            print('\n')
+            # print(bm1.id, item, type(bm1), bm1.bookmark[item])
+            # print(bm2.id, item, type(bm2), bm2.bookmark[item])
+            # print('\n')
             break
 
     return same
 
+if args.test:
+    FETCH_START = 0
+    FETCH_STOP_AT = 10
+    FETCH_COUNT_PER_TRANCHE = 4
+    FETCH_SORT = 1
+    print( "TESTING..." )
+else:
+    FETCH_START = 0
+    FETCH_STOP_AT = -1
+    FETCH_COUNT_PER_TRANCHE = 100
+    FETCH_SORT = 1
+
 def fetch_tranche(start):
-    if fetch_stop_at >= 0 and start >= fetch_stop_at:
+    if FETCH_STOP_AT >= 0 and start >= FETCH_STOP_AT:
         return ''
 
-    url = f'https://secure.diigo.com/api/v2/bookmarks?key={args.key}&user={args.username}&filter=all&count={fetch_count_per_tranche}&start={start}'
+    url = f'https://secure.diigo.com/api/v2/bookmarks?key={args.key}&user={args.username}&filter=all&count={FETCH_COUNT_PER_TRANCHE}&start={start}&sort={FETCH_SORT}'
     response = requests.get(url, auth=HTTPBasicAuth(args.username, args.pw))
 
     # spinner
-    sys.stdout.write(next(spinner))   # write the next character
-    sys.stdout.flush()                # flush stdout buffer (actual character display)
-    sys.stdout.write('\b')            # erase the last written char
+    sys.stdout.write(next(spinner))
+    sys.stdout.flush()
+    sys.stdout.write('\b')
 
     response.close()
     return response.json()
 
+
 def fetch_diigo_bookmarks(target_list):
-    start = fetch_start
+
+    logging.info('\n-- Downloading bookmarks from Diigo')
+
+    start = FETCH_START
     while bookmarks_tranche := fetch_tranche(start=start):
-        if bookmarks_tranche:
-            for b in bookmarks_tranche:
-                entry = DiigoBookmark(b)
-                remote_bookmark_list.append(entry)
-            start += 100
+        for b in bookmarks_tranche:
+            entry = DiigoBookmark(b)
+            remote_bookmark_list.append(entry)
+        start += 100
 
 #mark_test = list_of_remote_raw_bookmarks[-1]
 # b print(aookmark_test['tags'] = 'deft,emacs'
@@ -317,16 +364,17 @@ def fetch_diigo_bookmarks(target_list):
 # send_bookmark(bookmark_test)
 #--------------------------------------------------------------------------------------------------------
 #
-sys.stdout.write("Fetching bookmarks...\n")
 
 last_sync_time = 0;
 try:
-    with open('.diigorg.sync', 'r') as f:
+    with open(os.path.join(args.dir,'.diigorg.sync'), 'r') as f:
         last_sync_time = int(f.readline())
-        print( last_sync_time )
-        print( 'last sync was ', time.strftime(org_timestamp_format, time.localtime(last_sync_time)) )
+        last_sync_time_string = f'-- LAST SYNC: {time.strftime(ORG_TIMESTAMP_FORMAT, time.localtime(last_sync_time))}'
 except IOError:
-    print("first sync. stomping local data")
+    last_sync_time_string = "first sync. stomping local data"
+
+print(last_sync_time_string)
+logline(last_sync_time_string)
 
 # if there is no synctime
 #   print I don't see a synctime in this directory. the only option is to download everthing.
@@ -340,6 +388,7 @@ except IOError:
 #
 
 # fetch all diigo bookmarks
+sys.stdout.write("Fetching bookmarks...")
 remote_bookmark_list = []
 fetch_diigo_bookmarks(remote_bookmark_list)
 
@@ -349,41 +398,46 @@ if args.force_download:
         bm.write_bookmark_file()
     exit()
 
+#-----------------------------------------------
 # iterate local bookmarks
 local_bookmark_list = []
-for file in os.listdir("."):
+
+logging.info('\n-- Collecting local org bookmarks')
+for file in os.listdir(args.dir):
     if not file.endswith('.org'):
+
         logging.debug(f'Skipping local file -- {file}')
+
         continue
 
     local_bookmark_list.append(lbm := OrgBookmark(file))
 
 # we don't need to iterate twice but this keeps the logs pretty
+logging.info('\n-- Evaluating local org bookmarks')
 for lbm in local_bookmark_list:
-
     lbm.match = find_matching_bookmark(remote_bookmark_list, lbm)
     lbm.is_matched = lbm.match != None
 
     action=''
     if not lbm.has_changed and lbm.is_matched:
-        logging.info('Local'.ljust(15) + f'{lbm.logging_title}- No local change')
+        logline('Local', lbm.logging_title, 'No Change')
         continue
     elif not lbm.has_changed and not lbm.is_matched:
-        logging.info('Local'.ljust(15) + f'{lbm.logging_title}- is old and does not exist on server. Mark to delete.')
+        logline('Local', lbm.logging_title, org_timestamp(lbm.modified_timestamp), ' is old and does not exist on server. Mark to delete.')
         action = 'delete'
     elif lbm.has_changed and not lbm.is_matched:
-        logging.info('Local'.ljust(15) + f'{lbm.logging_title}- is a new bookmark. Mark to upload.')
+        logline('Local', lbm.logging_title, org_timestamp(lbm.modified_timestamp), ' is a new bookmark. Mark to upload.')
         action = 'send new'
     else: # has changed and is matched
         if (match_is_old := lbm.match.modified_timestamp <= last_sync_time):
-            logging.info('Local'.ljust(15) + f'{lbm.logging_title}- has changed and remote bookmark has not changed. Mark to upload.')
+            logline('Local', lbm.logging_title, org_timestamp(lbm.modified_timestamp), ' has changed and remote bookmark has not changed. Mark to upload.')
             action = 'send update'
         else: # remote bookmark has also changed
             if (real_conflict := not lbm.is_identical_to_match()):
-                logging.info('Local'.ljust(15) + f'{lbm.logging_title}- has changed and remote bookmark has also changed. Mark to resolve.')
+                logline('Local', lbm.logging_title, org_timestamp(lbm.modified_timestamp), ' has changed and remote bookmark has also changed. Mark to resolve.')
                 action = 'resolve'
             else:
-                logging.info('Local'.ljust(15) + f'{lbm.logging_title}- has been touched but is identical to remote bookmark. Mark to update remote timestamp.')
+                logline('Local', lbm.logging_title, org_timestamp(lbm.modified_timestamp), ' has been touched but is identical to remote bookmark. Mark to update remote timestamp.')
                 action = 'send timestamp'
 
     result = ''
@@ -399,43 +453,43 @@ for lbm in local_bookmark_list:
         case 'delete':
             result = lbm.delete()
 
-    print(result)
+    # print(result)
 
+logging.info('\n-- Comparing to downloaded Diigo bookmarks')
 for rbm in remote_bookmark_list:
-
     rbm.match = find_matching_bookmark(local_bookmark_list, rbm)
     rbm.is_matched = rbm.match != None
 
     # old bookmark. Move on.
     if not rbm.has_changed and rbm.is_matched:
-        logging.info('Remote'.ljust(15) + f'{rbm.logging_title}- has not changed')
+        logline('Remote', rbm.logging_title, org_timestamp(rbm.modified_timestamp), '- has not changed')
         continue
 
     action = ''
-    if rbm.has_changed and not rbm.is_matched:
-        logging.info('Remote'.ljust(15) + f'{rbm.logging_title}- is a new bookmark. Mark for writing to file.')
-        action = 'write new'
-    elif rbm.has_changed: # and is matched
-        logging.info('Remote'.ljust(15) + f'{rbm.logging_title}- has changed. Mark for updating {rbm.match.logging_title}.')
+    if rbm.is_new:
+        logline('Remote', rbm.logging_title, org_timestamp(rbm.modified_timestamp), f'NEW. Writing to {rbm.file}')
+        rbm.write_bookmark_file()
+    elif rbm.has_changed:
+        logline('Remote', rbm.logging_title, org_timestamp(rbm.modified_timestamp), f'CHANGED. Mark for updating {rbm.match.logging_title}.')
         action = 'write update'
-    elif not rbm.has_changed and not rbm.is_matched:
-        logging.info('Remote'.ljust(15) + f'{rbm.logging_title}- is old and has been deleted locally. Mark for deletion.')
+    elif not rbm.is_new and not rbm.is_matched:
+        logline('Remote', rbm.logging_title, org_timestamp(rbm.modified_timestamp), f'DELETED. Mark for deletion.')
         action = 'delete'
 
     result = ''
     match action:
-        case 'write new':
-            result = rbm.write_bookmark_file()
         case 'write update':
             result = rbm.update_bookmark_file()
         case 'delete':
             result = rbm.delete()
 
-    print(result)
+    # print(result)
 
-with open('.diigorg.sync', 'w') as f:
-    f.write(str(int(time.time())))
+with open(os.path.join(args.dir, '.diigorg.sync'), 'w') as f:
+    f.write(str(int(time.time() + 1)))
 
 
-sys.stdout.write("done!\n")
-
+print('Done!')
+print(f'Downloaded: {num_dl}')
+print(f'Uploaded: {num_ul}')
+print(f'Deleted {num_del}')
