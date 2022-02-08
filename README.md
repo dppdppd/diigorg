@@ -25,3 +25,5 @@ If you make these changes on diigo.com, you'll want to do a --full-sync to bring
 Diigorg usually asks for confirmations before committing changes, but if you're super nervous, you can run with --safe, which prevents any changes from actually being sent to diigo.com
 
 --reset will try to wipe the local dir and redownload everything. This is safe to do unless you've entered notes into your org files, since those aren't uploaded in any way.
+
+There'll be bugs. Back up your files.
