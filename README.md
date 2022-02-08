@@ -19,7 +19,7 @@ The cfg file allows you to specify which metadata you want at the file level (e.
 The diigo api does not support pushing changes to annotations or comments, so any changes to the local org file will not get pushed up to diigo.com.
 Best to use the diigo.com annotation tool for that.
 
-Because the updated timestamp on diigo bookmarks is not updated when tags, read later, or privacy states are changed on diigo.com, diigorg has no way to detect that these have changed or know whether they conflict with local changes.
+Because the updated timestamp on diigo bookmarks is not updated when tags, read later, or sharing state is changed, or when annotation are deleted on diigo.com, diigorg has no way to detect that these have changed or know whether they conflict with local changes.
 If you make these changes on diigo.com, you'll want to do a --full-sync to bring them down.
 
 Diigorg usually asks for confirmations before committing changes, but if you're super nervous, you can run with --safe, which prevents any changes from actually being sent to diigo.com
