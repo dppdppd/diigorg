@@ -251,8 +251,8 @@ class DiigoBookmark:
             buf += '\n'
             for annot in bm['annotations']:
                 buf += '** Highlight\n'
-                buf += '#+Editing of highlights and comments can only be done on Diigo.com\n'
-                buf += f'#+{query_link}\n'
+                # buf += '#+Editing of highlights and comments can only be done on Diigo.com\n'
+                # buf += f'#+{query_link}\n'
                 # buf += '#+BEGIN_QUOTE\n')
                 buf += f'{annot["content"]}\n'
                 # buf += '#+END_QUOTE\n')
