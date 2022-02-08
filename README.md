@@ -14,6 +14,8 @@ Some notes:
 Diigorg only touches the first heading in the org file, which is the bookmark, its metadata, annotations and comments. 
 Any other headings in the file (such as the default "* notes" heading, can be written to without worrying about them being cleared when/if changes are made to the bookmark on diigo.com.
 
+The cfg file allows you to specify which metadata you want at the file level (e.g. #+FILETAGS) and which metadata you want at the heading level (e.g. :roam_refs:/url/) so you can match your org-roam convention
+
 The diigo api does not support pushing changes to annotations or comments, so any changes to the local org file will not get pushed up to diigo.com.
 Best to use the diigo.com annotation tool for that.
 
