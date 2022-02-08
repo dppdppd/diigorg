@@ -28,12 +28,13 @@ def dir_path(path):
         raise argparse.ArgumentTypeError(f"{path} is not a valid path")
 
 argParser = argparse.ArgumentParser(description = 'Sync Diigo bookmarks to Org files')
-argParser.add_argument('-i', '--incremental', nargs='?', const=True,  help='Will push any recent local changes but will only download recent changes in bookmark name, url, description, and/or annotations on diigo.com.')
+argParser.add_argument('--full-sync', nargs='?', const=True,  help='Normally, diigorg will find all local changes, and any major changes on diigo.com to Title, URL, Description, or Annotations.\n --full-sync will compare all changes and is the only way to capture diigo.com changes to tags, readlater, or privacy')
 argParser.add_argument('-d', '--dir', type=dir_path, default=os.getcwd(), help='Directory to sync')
 argParser.add_argument('--reset', nargs='?', const=True, help='If specified, diigorg will redownload all bookmarks and ignore local changes')
 argParser.add_argument('--safe', nargs='?', const=True, help='If specified, diigorg will not delete or modify any bookmarks on diigo.com')
+argParser.add_argument('-y','--yes', nargs='?', const=True, help='If specified, diigorg will not ask for confirmation before making changes')
 argParser.add_argument('--test', nargs='?', const=True, help='for debugging only. do not use.')
-argParser.add_argument('--fix-tags-on-server', nargs='?', const=True, help='If specified, diigorg will do a --full sync and make all diigo server tags org-compliant')
+argParser.add_argument('--fix-tags-on-server', nargs='?', const=True, help='If specified, diigorg will make all diigo server tags org-compliant')
 args = argParser.parse_args()
 
 ####### CONFIG FILE
@@ -88,11 +89,11 @@ if not os.path.exists(stuff_dir):
     os.mkdir(stuff_dir)
 
 if args.reset:
-    args.incremental = False
+    args.full_sync = True
     args.safe = True
 
 if args.fix_tags_on_server:
-    args.incremental = False
+    args.full_sync = True
 
 logging.basicConfig(filename=os.path.join(stuff_dir,'diigorgg.log'), encoding='utf-8', level=logging.INFO, filemode='w')
 
@@ -271,7 +272,7 @@ class DiigoBookmark:
         return buf
 
     def update_bookmark_file(self):
-        ""
+        "update an existing local bookmark with changes from the server"
         global num_dl
         file_object = open(self.file, 'r')
         source_buffer = file_object.readlines()
@@ -296,7 +297,7 @@ class DiigoBookmark:
     def fix_tags_for_delete(self):
         self.bookmark['tags'] = (',').join(self.bookmark['tags'])
 
-    def delete(self, reason='local bookmark was deleted.'):
+    def delete_remote_bookmark(self, reason='local bookmark was deleted.'):
         global num_del
         self.fix_tags_for_delete()
         num_del += 1
@@ -319,7 +320,7 @@ class OrgBookmark:
         self.modified_timestamp = self._get_file_modtime()
         self.bookmark = {}
         self.has_changed = self.modified_timestamp > last_sync_time
-        self.logging_title = self.short_id + ' ' + f'{self.file[:50].ljust(50)}'
+        self.logging_title = f'"{os.path.basename(self.file)[:50].ljust(50)}"'
         # logline('Reading', self.logging_title, org_timestamp(self.modified_timestamp), "CHANGED" if self.has_changed else "")
 
     def is_an_org_bookmark(self):
@@ -403,20 +404,20 @@ class OrgBookmark:
     def fix_readlater_for_upload(self):
         self.bookmark['readLater'] = self.bookmark['readlater']
 
-    def send(self, reason=''):
+    def upload_bookmark(self, reason=''):
         global num_ul
         self.parse_and_fill_out()
         self.fix_tags_for_upload()
         self.fix_readlater_for_upload()
         url = f'https://secure.diigo.com/api/v2/bookmarks?key={cfg["diigo_credentials"]["api_key"]}&user={cfg["diigo_credentials"]["username"]}&merge=no'
         if not args.safe:
-            print( 'sending ', self.bookmark['title'], reason )
+            print( 'uploading ', self.bookmark['title'], reason )
             response = requests.post(url, auth=HTTPBasicAuth(cfg["diigo_credentials"]["username"], cfg["diigo_credentials"]['passwd']), json=self.bookmark)
             response.close()
             num_ul += 1
             return response.json()
 
-    def delete(self):
+    def delete_local_bookmark(self):
         global num_del
         os.remove(self.file)
         num_del += 1
@@ -487,9 +488,9 @@ def fetch_diigo_bookmarks(target_list):
     while bookmarks_tranche := fetch_tranche(start=start):
         for b in bookmarks_tranche:
             entry = DiigoBookmark(b)
-            if not args.incremental or entry.has_changed:
+            if args.full_sync or entry.has_changed:
                 remote_bookmark_list.append(entry)
-            elif args.incremental and not entry.has_changed:
+            elif not args.full_sync and not entry.has_changed:
                 done = True
                 break
         if done:
@@ -498,8 +499,16 @@ def fetch_diigo_bookmarks(target_list):
             start += 100
 
 
+
+if args.full_sync:
+    print('Doing a full sync of all bookmarks.')
+else:
+    print('Doing an incremental sync since last update.\nNote that any recent changes on diigo.com to Tags, ReadLater, or Private states will not be detected and require a "--full-sync"')
+
 last_sync_time = 0
-last_sync_time_string = "First sync. Downloading all bookmarks and stomping local data, if there is any."
+last_sync_time_string = "First sync (or a --reset). Downloading all bookmarks."
+
+# if we're resetting, try to delete all of the existing bookmarks.
 if args.reset:
     for file in glob.iglob(args.dir + '**/*.org', recursive=True):
         if OrgBookmark(file).is_an_org_bookmark():
@@ -515,20 +524,21 @@ else:
             case 'y':pass
             case 'n':exit()
 
-
 print(last_sync_time_string)
 logline(last_sync_time_string)
 
 # fetch all diigo bookmarks
-sys.stdout.write('Fetching bookmarks...')
 remote_bookmark_list = []
+sys.stdout.write('\nFetching bookmarks...')
 fetch_diigo_bookmarks(remote_bookmark_list)
-
 sys.stdout.write('\n')
-
-#-----------------------------------------------
-# iterate local bookmarks
 local_bookmark_list = []
+
+bookmarks_to_upload = []
+bookmarks_to_download = []
+bookmarks_to_update_locally = []
+bookmarks_to_delete_locally = []
+bookmarks_to_delete_remotely = []
 
 if not args.reset:
     logging.info('\n-- Collecting local org bookmarks from ' + args.dir)
@@ -543,19 +553,24 @@ if not args.reset:
         lbm.is_matched = lbm.match != None
 
         action=''
-        if not args.incremental and lbm.is_matched and lbm.compare_to_match_minor():
+        if args.full_sync and lbm.is_matched and lbm.compare_to_match_minor():
             # if we're doing a full sync, compare every bookmark
+            # This is a resolve because we have no idea whether this was changed on the server
             logline('Local', lbm.logging_title, 'full sync and tags or readlater are different')
             action = 'resolve'
-        elif not args.incremental and not lbm.has_changed and not lbm.is_matched:
+
+        elif args.full_sync and not lbm.has_changed and not lbm.is_matched:
             # in the case that we downloaded all remote bookmarks, we can determine whether
             # the absence of a bookmark on diigo means we should delete it locally
             logline('Local', lbm.logging_title, org_timestamp(lbm.modified_timestamp), ' hasn\'t changed and we know it does not exist on server. Delete.')
             action = 'delete'
+
         elif not lbm.has_changed and lbm.is_matched:
             logline('Local', lbm.logging_title, 'hasn\'t changed and remote match exists.')
-        elif not args.incremental and not lbm.has_changed:
+
+        elif args.full_sync and not lbm.has_changed:
             logline('Local', lbm.logging_title, 'hasn\'t changed and we don\'t know whether remote exists')
+
         elif lbm.has_changed:
             if lbm.is_matched and lbm.match.has_changed and lbm.compare_to_match():
                 action = 'resolve'
@@ -573,29 +588,31 @@ if not args.reset:
                     action = 'upload'
             else:
                 print('THERE\'S A CONFLICT:')
-                print(f'{lbm.logging_title} has changed both in file and on the server.')
+                print(f'{lbm.logging_title} needs to be resolved.')
                 print('\n')
                 print(f'{"Field".ljust(40)} {"Local".ljust(40)} {"Server".ljust(40)}')
                 for item in all_diffs:
                     print(f'{str(item[0]).ljust(40)} {str(item[1]).ljust(40)} {str(item[2]).ljust(40)}')
                 print('\n')
 
-                while decision.lower() not in ['l','s']:
-                    decision = input('Enter "s" or "l" or "Ctrl-c"\n[l] Keep local version. [s] Keep server version. [Ctrl-c] Cancel sync :')
+                while decision not in ['l','s']:
+                    decision = input('[l] Keep Local version. [s] Keep Server version. [q] Quit :').lower()
 
                 match decision:
                     case 'l':
                         action = 'upload'
                     case 's':
                         action = 'update'
+                    case 'q':
+                        exit()
 
         match action:
             case 'upload':
-                lbm.send()
+                bookmarks_to_upload.append(lbm)
             case 'delete':
-                lbm.delete()
+                bookmarks_to_delete_locally.append(lbm)
             case 'update':
-                lbm.match.update_bookmark_file()
+                bookmarks_to_update_locally.append(lbm.match)
 
 logging.info('\n-- Comparing to downloaded Diigo bookmarks')
 for rbm in remote_bookmark_list:
@@ -606,24 +623,75 @@ for rbm in remote_bookmark_list:
     action = ''
     if not rbm.has_changed and rbm.is_matched:
         logline('Server', rbm.logging_title, org_timestamp(rbm.modified_timestamp), '- has not changed')
+
     elif rbm.is_new or args.reset:
         logline('Server', rbm.logging_title, org_timestamp(rbm.modified_timestamp), f'NEW. Writing to {rbm.file}')
-        action = 'write'
+        action = 'download'
+
     elif rbm.has_changed:
         logline('Server', rbm.logging_title, org_timestamp(rbm.modified_timestamp), f'CHANGED. Mark for updating {rbm.match.logging_title}.')
         action = 'update'
+
     elif not rbm.is_new and not rbm.is_matched:
         logline('Server', rbm.logging_title, org_timestamp(rbm.modified_timestamp), f'DELETED. Mark for deletion.')
         action = 'delete'
 
-    result = ''
     match action:
-        case 'write':
-            rbm.write_bookmark_file()
+        case 'download':
+            bookmarks_to_download.append(rbm)
         case 'update':
-            rbm.update_bookmark_file()
+            bookmarks_to_update_locally.append(rbm)
         case 'delete':
-            rbm.delete()
+            bookmarks_to_delete_remotely.append(rbm)
+
+# do stuff
+total_changes = 0
+print(f'\n{len(bookmarks_to_download)} new on diigo.com. Org file will be written:\n------------------------------------')
+for bm in bookmarks_to_download:
+    total_changes += 1
+    print(f'"{bm.bookmark["title"]}"')
+
+print(f'\n{len(bookmarks_to_update_locally)} modified on diigo.com. Org file will be updated:\n------------------------------------')
+for bm in bookmarks_to_update_locally:
+    total_changes += 1
+    print(f'"{bm.bookmark["title"]}"')
+
+print(f'\n{len(bookmarks_to_delete_locally)} missing from diigo.com. Org file will be deleted:\n------------------------------------')
+for bm in bookmarks_to_delete_locally:
+    total_changes += 1
+    print(f'"{bm.get_node_title()}"')
+
+print(f'\n{len(bookmarks_to_upload)} modified org file. Bookmark Will be uploaded to diigo.com:\n------------------------------------')
+for bm in bookmarks_to_upload:
+    total_changes += 1
+    print(f'"{bm.get_node_title()}"')
+
+print(f'\n{len(bookmarks_to_delete_remotely)} missing org file. Bookmark will be deleted from diigo.com:\n------------------------------------')
+for bm in bookmarks_to_delete_remotely:
+    total_changes += 1
+    print(f'"{bm.bookmark["title"]}"')
+
+if not args.yes and total_changes > 0:
+    decision = ''
+    while decision not in ['y','n']:
+        decision = input('Proceed? [y/n]').lower()
+    if decision == 'n':
+        exit()
+
+for bm in bookmarks_to_download:
+    bm.write_bookmark_file()
+
+for bm in bookmarks_to_update_locally:
+    bm.update_bookmark_file()
+
+for bm in bookmarks_to_delete_locally:
+    bm.delete_local_bookmark()
+
+for bm in bookmarks_to_upload:
+    bm.upload_bookmark()
+
+for bm in bookmarks_to_delete_remotely:
+    bm.delete_remote_bookmark()
 
 with open(os.path.join(stuff_dir, '.diigorg.sync'), 'w') as f:
     f.write(str(int(time.time() + 1)))
