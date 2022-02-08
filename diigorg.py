@@ -95,7 +95,7 @@ if args.reset:
 if args.fix_tags_on_server:
     args.full_sync = True
 
-logging.basicConfig(filename=os.path.join(stuff_dir,'diigorgg.log'), encoding='utf-8', level=logging.INFO, filemode='w')
+logging.basicConfig(filename=os.path.join(stuff_dir,'diigorg.log'), encoding='utf-8', level=logging.INFO, filemode='w')
 
 ORG_TIMESTAMP_FORMAT = '[%Y-%m-%d %a %H:%M:%S]'
 FILENAME_DELIMITER = ' - '
