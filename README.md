@@ -27,3 +27,6 @@ Diigorg usually asks for confirmations before committing changes, but if you're 
 --reset will try to wipe the local dir and redownload everything. This is safe to do unless you've entered notes into your org files, since those aren't uploaded in any way.
 
 There'll be bugs. Back up your files.
+
+![Screenshot 2022-02-07 230447](https://user-images.githubusercontent.com/1166577/152935455-cc69c736-c3ab-487f-8c70-214b35d4ba39.png)
+
