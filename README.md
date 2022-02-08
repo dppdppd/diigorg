@@ -11,7 +11,7 @@ Sync back and forth between diigo and org mode
 
 some notes:
 - diigorg only touches the first heading in the org file, which is the bookmark, its metadata, and annotations and comments. 
-Any other headings in the file (such as the default `notes` heading, are untouched and can be written in without worrying about them being erased if changes are brought down from diigo.
+Any other headings in the file (such as the default "* notes" heading, are untouched and can be written to without worrying about them being overwritten if changes are brought down from diigo.
 However, if the bookmark is deleted on diigo.com, then the whole org file will be marked for deletion.
 
 - the diigo api does not allow for the modification of annotations or comments so those are read only.
