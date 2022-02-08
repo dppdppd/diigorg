@@ -3,10 +3,11 @@ Sync back and forth between diigo and org mode
 
 0. you'll need python 3.10+ and all of the packages it will complain that you're missing when you first try to run it.
 1. create a bookmarks directory, e.g. "bookmarks"
-2. run diigorg `python3.10 /path/to/diigorg.py
-3. diigorg will have created diigorg.cfg. At a minimum, you will need to insert your diigo username, diigo password, and diigo api key.
-4. run diigorg again.
-5. ...profit.
+2. run diigorg `python3.10 /path/to/diigorg.py` in the bookmarks directory
+3. diigorg will have not done anything other than create `diigorg.cfg`.
+4. edit `diigorg.cfg` and insert your diigo username, diigo password, and diigo api key.
+5. run diigorg again.
+6. ...profit.
 
 some notes:
 - diigorg only touches the first heading in the org file, which is the bookmark, its metadata, and annotations and comments. 
