@@ -22,6 +22,6 @@ Best to use the diigo.com annotation tool for that.
 Because the updated timestamp on diigo bookmarks is not updated when tags, read later, or privacy states are changed on diigo.com, diigorg has no way to detect that these have changed or know whether they conflict with local changes.
 If you make these changes on diigo.com, you'll want to do a --full-sync to bring them down.
 
-Diigorg always asks for confirmations before committing changes, but if you're super nervous, you can run with --safe, which prevents any changes from actually being sent to diigo.com
+Diigorg usually asks for confirmations before committing changes, but if you're super nervous, you can run with --safe, which prevents any changes from actually being sent to diigo.com
 
---reset will try to wipe the local dir and redownload everything. this is safe to do unless you've entered notes into your org files, since those aren't uploaded in any way.
+--reset will try to wipe the local dir and redownload everything. This is safe to do unless you've entered notes into your org files, since those aren't uploaded in any way.
