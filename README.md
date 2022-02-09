@@ -1,5 +1,5 @@
 # diigorg
-Sync back and forth between diigo and org mode
+Sync back and forth between Diigo.com and org mode files
 
 0. You'll need python 3.10+ and all of the packages it will complain that you're missing when you first try to run it.
 1. Create a bookmarks directory, e.g. "bookmarks"
