@@ -1,0 +1,5 @@
+Django==4.0.1
+orgparse==0.3.0
+python_dateutil==2.8.2
+requests==2.25.1
+shortuuid==1.0.9
