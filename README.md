@@ -1,13 +1,15 @@
 # diigorg
 Sync back and forth between Diigo.com and org mode files
 
-0. You'll need python 3.10+ and all of the packages it will complain that you're missing when you first try to run it.
-1. Create a bookmarks directory, e.g. "bookmarks"
-2. Run diigorg `python3.10 /path/to/diigorg.py` in the bookmarks directory
-3. Diigorg will have not done anything other than create `diigorg.cfg`.
-4. Edit `diigorg.cfg` and insert your diigo username, diigo password, and diigo api key.
-5. Run diigorg again to download all of your bookmarks.
-6. ...Profit.
+0. You'll need python 3.10+ and pip
+1. `gh repo clone dppdppd/diigorg`
+2. `pip install -r requirements.txt`
+3. Create a bookmarks directory, e.g. "bookmarks"
+4. Run diigorg `python3.10 /path/to/diigorg.py` in the bookmarks directory
+5. Diigorg will have not done anything other than create `diigorg.cfg`.
+6. Edit `diigorg.cfg` and insert your diigo username, diigo password, and diigo api key.
+7. Run diigorg again to download all of your bookmarks.
+8. ...Profit.
 
 Some notes:
 
